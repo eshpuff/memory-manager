@@ -18,32 +18,20 @@ long long parseMemorySize(const char * sizeStr) {
     long long value;
     char unit[5] = "";
 
-    if (sscanf(sizeStr, "%lld%4s", &value, unit) < 1) {
-        return -1; // erro na conversão
-    }
-
-    for (int i = 0; unit[i]; i++) {
-        unit[i] = tolower(unit[i]); // converte para minusculo
-    }
+    if (sscanf(sizeStr, "%lld%4s", &value, unit) < 1) return -1; // erro na conversão
+    for (int i = 0; unit[i]; i++) unit[i] = tolower(unit[i]); // converte para minusculo
 
     // converte a unidade para bytes
-    if(strcmp(unit, "kb") == 0) {
-        return value * 1024LL;
-    } else if(strcmp(unit, "mb") == 0) {
-        return value * 1024LL * 1024LL;
-    } else if(strcmp(unit, "gb") == 0) {
-        return value * 1024LL * 1024LL * 1024LL;
-    } else if(strcmp(unit, "b") == 0) {
-        return value; // bytes
-    } else {
-        return -1; // unidade desconhecida
-    }
+    if(strcmp(unit, "kb") == 0) return value * 1024LL;
+    if(strcmp(unit, "mb") == 0) return value * 1024LL * 1024LL;
+    if(strcmp(unit, "gb") == 0) return value * 1024LL * 1024LL * 1024LL;
+    if(strcmp(unit, "b") == 0) return value; // bytes
+    return -1; // unidade desconhecida
 }
 
 int countDistinctPages(PageAccess * accessSequence, int numAccesses) {
-    if (numAccesses == 0) return 0;
-    
-    char ** distinctPages = (char **)malloc(numAccesses * sizeof(char *));
+    // if (numAccesses == 0) return 0;
+    char ** distinctPages = malloc(numAccesses * sizeof(char *));
     int count = 0;
 
     for (int i = 0; i < numAccesses; i++) {
@@ -55,8 +43,8 @@ int countDistinctPages(PageAccess * accessSequence, int numAccesses) {
             }
         }
         if (!found) {
-            distinctPages[count] = accessSequence[i].page_id;
-            count++;
+            distinctPages[count++] = accessSequence[i].page_id;
+            // count++;
         }
     }
     free(distinctPages);
@@ -65,7 +53,8 @@ int countDistinctPages(PageAccess * accessSequence, int numAccesses) {
 
 // SIMULAÇÃO DO ALGORITMO OTIMO
 int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPhysicalPages) {
-    char **physicalMemoryFrames = (char **)calloc(numPhysicalPages, sizeof(char *));
+    char **frames = malloc(numPhysicalPages * sizeof(char *));
+    for (int i= 0; i < numPhysicalPages; i++) frames[i] = NULL; // inicializa os frames como vazios
     int pageFaults = 0;
 
     for (int i = 0; i < numAccesses; i++) {
@@ -73,7 +62,7 @@ int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPh
         int pageFound = 0;
 
         for (int j = 0; j < numPhysicalPages; j++) {
-            if (physicalMemoryFrames[j] != NULL && strcmp(physicalMemoryFrames[j], currentPage) == 0) {
+            if (frames[j] && strcmp(frames[j], currentPage) == 0) {
                 pageFound = 1;
                 break;
             }
@@ -83,44 +72,45 @@ int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPh
             pageFaults++;
             int emptySlot = -1;
             for (int j = 0; j < numPhysicalPages; j++) {
-                if (physicalMemoryFrames[j] == NULL) {
+                if (frames[j] == NULL) {
                     emptySlot = j;
                     break;
                 }
             }
 
             if (emptySlot != -1) {
-                physicalMemoryFrames[emptySlot] = currentPage;
+                frames[emptySlot] = currentPage;
             } else {
                 // mem cheia -> aplica o alg otimo
-                int victimIndex = -1;
+                int victim = -1;
                 int farthest = -1;
 
                 for (int j = 0; j < numPhysicalPages; j++) {
-                    int nextUse = INT_MAX;
+                    int next = INT_MAX;
                     for (int k = i + 1; k < numAccesses; k++) {
-                        if (strcmp(physicalMemoryFrames[j], accessSequence[k].page_id) == 0) {
-                            nextUse = k;
+                        if (strcmp(frames[j], accessSequence[k].page_id) == 0) {
+                            next = k;
                             break;
                         }
                     }
 
-                    if (nextUse > farthest) {
-                        farthest = nextUse;
-                        victimIndex = j;
+                    if (next > farthest) {
+                        farthest = next;
+                        victim = j;
                     }
                 }
-                physicalMemoryFrames[victimIndex] = currentPage;
+                frames[victim] = currentPage;
             }
         }
     }
-    free(physicalMemoryFrames);
+    free(frames);
     return pageFaults;
 }
 
 // SIMULAÇÃO DO ALGORITMO FIFO
 int runFifoSimulation(PageAccess * accessSequence, int numAccesses, int numPhysicalPages) {
-    char **physicalMemoryFrames = (char **)calloc(numPhysicalPages, sizeof(char *));
+    char **frames = malloc(numPhysicalPages * sizeof(char *));
+    for (int i = 0; i < numPhysicalPages; i++) frames[i] = NULL; // inicializa os frames como vazios
     int pageFaults = 0;
     int fifoPointer = 0;
 
@@ -129,7 +119,7 @@ int runFifoSimulation(PageAccess * accessSequence, int numAccesses, int numPhysi
         int pageFound = 0;
 
         for (int j = 0; j < numPhysicalPages; j++) {
-            if (physicalMemoryFrames[j] != NULL && strcmp(physicalMemoryFrames[j], currentPage) == 0) {
+            if (frames[j] && strcmp(frames[j], currentPage) == 0) {
                 pageFound = 1;
                 break;
             }
@@ -137,14 +127,15 @@ int runFifoSimulation(PageAccess * accessSequence, int numAccesses, int numPhysi
 
         if (!pageFound) {
             pageFaults++;
-            physicalMemoryFrames[fifoPointer] = currentPage;
+            frames[fifoPointer] = currentPage;
             fifoPointer = (fifoPointer + 1) % numPhysicalPages; // avança
         }
     }
-    free(physicalMemoryFrames);
+    free(frames);
     return pageFaults;
 }
 
+// FUNÇÃO MAIN
 int main(int argc, char *argv[]) {
     // eespera os argumentos: ./programa <arquivo> <tamanho_memoria>
     if (argc < 3) {
@@ -153,14 +144,14 @@ int main(int argc, char *argv[]) {
     }
 
     FILE *file = fopen(argv[1], "r");
-    if (file == NULL) {
-        perror("erro ao abrir o arq de acessos");
+    if (!file) {
+        perror("[ERRO] ao abrir o arquivo.");
         return 1;
     }
 
     //parsea o tamanho da memória física
-    long long physicalMemoryBytes = parseMemorySize(argv[2]);
-    if (physicalMemoryBytes < 0) {
+    long long memBytes = parseMemorySize(argv[2]);
+    if (memBytes < PAGE_SIZE_BYTES) {
         fprintf(stderr, "[ERRO] tamanho de memória física inválido: %s\n", argv[2]);
         fclose(file);
         return 1;
@@ -172,47 +163,55 @@ int main(int argc, char *argv[]) {
     //     return 1;
     // }
 
-    int numPhysicalPages = physicalMemoryBytes / PAGE_SIZE_BYTES;
+    int numPages = memBytes / PAGE_SIZE_BYTES;
 
     //variaveis para armazenar os acessos
-    PageAccess * accessSequence = NULL;
-    int numAccesses = 0;
+    PageAccess * accessSequence = malloc(100 * sizeof(PageAccess));
     int capacity = 100; // capacidade inicial para o array dinamico
+    int numAccesses = 0;
+    char line[256]; // buffer para ler cada linha do arquivo
     
-    accessSequence = (PageAccess *)malloc(capacity * sizeof(PageAccess));
-
-    char line[256]; // buffer que lê cada linha
-    while (fgets(line, sizeof(line), file) != NULL) {
-        char bufferPageId[MAX_PAGE_ID_LEN];
+    // accessSequence = (PageAccess *)malloc(capacity * sizeof(PageAccess));
+    while (fgets(line, sizeof(line), file)) {
+        char buffer[MAX_PAGE_ID_LEN];
         int lineNum;
 
-        if (sscanf(line, "%d %s", &lineNum, bufferPageId) == 2) {
+        if (sscanf(line, "%d %s", &lineNum, buffer) == 2 || sscanf(line, "%s", buffer) == 1) {
             // sucesso! copia o id da pagina
-            strcpy(accessSequence[numAccesses].page_id, bufferPageId);
+            if (strcmp(buffer, "...") == 0) continue; // ignora linhas com apenas "..."
+            strcpy(accessSequence[numAccesses].page_id, buffer);
             numAccesses++;
-        } else if (sscanf(line, "%s", bufferPageId) == 1) {
-            if (strcmp(bufferPageId, "...") == 0) {
-                continue; // ignora linhas com apenas "..."
+            if (numAccesses == capacity) {
+                capacity *= 2; // dobra a capacidade se necessário
+                accessSequence = realloc(accessSequence, capacity * sizeof(PageAccess));
             }
-            // sucesso! copia o id da pagina
-            strcpy(accessSequence[numAccesses].page_id, bufferPageId);
-            numAccesses++;
-        }
-
-        if (numAccesses == capacity) {
-            // se a capacidade for atingida, reAloca o array
-            capacity *= 2;
-            // PageAccess * temp = (PageAccess *)realloc(accessSequence, capacity * sizeof(PageAccess));
-            // if (temp == NULL) {
-            //     perror("[ERRO] de realocaçao de mem para a seq de acessos");
-            //     free(accessSequence);
-            //     fclose(file);
-            //     return 1;
-            // }
-            accessSequence = (PageAccess *)realloc(accessSequence, capacity * sizeof(PageAccess));
         }
     }
     fclose(file);
+
+    //         if (sscanf(line, "%s", bufferPageId) == 1) {
+    //         if (strcmp(bufferPageId, "...") == 0) {
+    //             continue; // ignora linhas com apenas "..."
+    //         }
+    //         // sucesso! copia o id da pagina
+    //         strcpy(accessSequence[numAccesses].page_id, bufferPageId);
+    //         numAccesses++;
+    //     }
+
+    //     if (numAccesses == capacity) {
+    //         // se a capacidade for atingida, reAloca o array
+    //         capacity *= 2;
+    //         // PageAccess * temp = (PageAccess *)realloc(accessSequence, capacity * sizeof(PageAccess));
+    //         // if (temp == NULL) {
+    //         //     perror("[ERRO] de realocaçao de mem para a seq de acessos");
+    //         //     free(accessSequence);
+    //         //     fclose(file);
+    //         //     return 1;
+    //         // }
+    //         accessSequence = (PageAccess *)realloc(accessSequence, capacity * sizeof(PageAccess));
+    //     }
+    // }
+    // fclose(file);
 
     // if (accessSequence == NULL) {
     //     perror("Erro de alocação de memória para a sequência de acessos");
@@ -224,24 +223,21 @@ int main(int argc, char *argv[]) {
 
         // redireciona o array se a capacidade for atingida
     
-    int distinctPageCount = countDistinctPages(accessSequence, numAccesses);
-    int optimalPageFaults = runOptimalSimulation(accessSequence, numAccesses, numPhysicalPages);
-    int fifoFaults = runFifoSimulation(accessSequence, numAccesses, numPhysicalPages);
+    int distinct = countDistinctPages(accessSequence, numAccesses);
+    int optimalFaults = runOptimalSimulation(accessSequence, numAccesses, numPages);
+    int fifoFaults = runFifoSimulation(accessSequence, numAccesses, numPages);
 
-    double efficiency = 0.0;
-    if (fifoFaults > 0) {
-        efficiency = ((double)optimalPageFaults / fifoFaults) * 100.0;
-    }
+    double efficiency = (fifoFaults > 0) ? ((double)optimalFaults / fifoFaults) * 100.0 : 0.0;
 
     //resuktados
-    printf("a memória fisica comporta %d paginas\n", numPhysicalPages);
-    printf("existem %d paginas distintas no aqruivo\n", distinctPageCount);
-    printf("o algoritmo otimo teve %d faltas de pagina\n", optimalPageFaults);
+    printf("a memória fisica comporta %d paginas\n", numPages);
+    printf("existem %d paginas distintas no aqruivo\n", distinct);
+    printf("o algoritmo otimo teve %d faltas de pagina\n", optimalFaults);
     printf("o algoritmo FIFO teve %d faltas de pagina\n", fifoFaults);
     printf("atigindo %.2f%% do desempenho do algoritmo otimo\n", efficiency);
 
-    char choice;
     printf("Deseja ver a simulação do FIFO? (s/n): ");
+    char choice;
     scanf(" %c", &choice);
 
     if (choice == 's' || choice == 'S') {
