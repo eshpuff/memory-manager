@@ -1,9 +1,74 @@
 #include "simulator.h"
 
+// funçao aux pra verificar presença usando a tabela hash aux
+static int isPageInFrames(PresenceNode* presenceMap[], const char* page_id) {
+    unsigned int index = hashOptimize(page_id);
+    PresenceNode* current = presenceMap[index];
+
+    while(current) {
+        if(strcmp(current->page_id, page_id) == 0) return 1;
+        current = current->next;
+    }
+    return 0;
+}
+
+// função aux para adicionar ou remover da tabela de presença
+static void updatePresence(PresenceNode* presenceMap[], const char* page_id, int add) {
+    unsigned int index = hashOptimize(page_id);
+
+    if (add) {
+        PresenceNode* newNode = (PresenceNode*)malloc(sizeof(PresenceNode));
+        if (!newNode) {
+            perror("falha ao alocar memoria para nodo de presença");
+            exit(1);
+        }
+
+        strcpy(newNode->page_id, page_id);
+        newNode->next = presenceMap[index];
+        presenceMap[index] = newNode;
+    } else {
+        PresenceNode* current = presenceMap[index];
+        PresenceNode* prev = NULL;
+
+
+        while(current) {
+            if(strcmp(current->page_id, page_id) == 0) {
+                if(prev) prev->next = current->next;
+                else presenceMap[index] = current->next;
+                free(current);
+                return;
+            }
+
+            prev = current;
+            current = current->next;
+        }
+    }
+}
+
+// função auxiliar do otimo para encontrar o prox uso de uma pag
+static int getNextUse(HashNode* node, int currentIndex) {
+    // Avança o cursor ate encontrar um uso futuro que seja depois do indice atual
+    while (node->nextUsePointer < node->numFutureUses &&
+           node->futureUses[node->nextUsePointer] <= currentIndex) {
+        node->nextUsePointer++;
+    }
+
+    // se ainda tiver usos futuros retorna o proximo
+    if (node->nextUsePointer < node->numFutureUses) {
+        return node->futureUses[node->nextUsePointer];
+    }
+
+    return INT_MAX;
+}
+
 int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPhysicalPages) {
     char **frames = malloc(numPhysicalPages * sizeof(char *));
-    for (int i = 0; i < numPhysicalPages; i++) frames[i] = NULL; // inicializa os frames como vazios
+    for (int i = 0; i < numPhysicalPages; i++) frames[i] = NULL;
     int pageFaults = 0;
+
+    PresenceNode* presenceMap[HASH_TABLE_SIZE];
+    for(int i = 0; i < HASH_TABLE_SIZE; i++) presenceMap[i] = NULL;
+
 
     for (int i = 0; i < numAccesses; i++) {
         if (i > 0 && i % LOG_INTERVAL == 0) {
@@ -11,21 +76,13 @@ int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPh
         }
 
         char *currentPage = accessSequence[i].page_id;
-        int pageFound = 0;
-
-        for (int j = 0; j < numPhysicalPages; j++) {
-            if (frames[j] && strcmp(frames[j], currentPage) == 0) {
-                pageFound = 1;
-                break;
-            }
-        }
+        int pageFound = isPageInFrames(presenceMap, currentPage);
 
         char* victimPageId = NULL;
         int slotIndex = -1;
 
         if (!pageFound) {
             pageFaults++;
-            // incementa o contador de carregamento pro otimo
             incrementLoadCount(currentPage, "optimal");
 
             if (g_verbose) {
@@ -42,37 +99,40 @@ int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPh
 
             if (emptySlot != -1) {
                 frames[emptySlot] = currentPage;
-                slotIndex = emptySlot; // guarda o slot para o log
+                updatePresence(presenceMap, currentPage, 1); // adiciona na tabela de presença
+                slotIndex = emptySlot;
                 if (g_verbose) {
                     printf("inserido em: %d.\n", emptySlot);
                 }
             } else {
-                // mem cheia -> aplicao alg otimo para escolher qual substituir
                 int victim = -1;
                 int farthest = -1;
 
                 for (int j = 0; j < numPhysicalPages; j++) {
-                    int next = INT_MAX;
-                    for (int k = i + 1; k < numAccesses; k++) {
-                        if (strcmp(frames[j], accessSequence[k].page_id) == 0) {
-                            next = k;
-                            break;
-                        }
+                    HashNode* frameNode = findNode(frames[j]);
+                    int nextUse = getNextUse(frameNode, i);
+
+                    if (nextUse == INT_MAX) {
+                        victim = j;
+                        break;
                     }
-                    if (next > farthest) {
-                        farthest = next;
+
+                    if (nextUse > farthest) {
+                        farthest = nextUse;
                         victim = j;
                     }
                 }
 
-                victimPageId = strdup(frames[victim]); // copia o nome da vítima p log
-                slotIndex = victim; // guarda o slot pro log
+                victimPageId = strdup(frames[victim]);
+                slotIndex = victim;
 
                 if (g_verbose) {
                     printf("substituindo página '%s' na posição %d por '%s'.\n", frames[victim], victim, currentPage);
                 }
-
+                
+                updatePresence(presenceMap, frames[victim], 0); // Remove vítima
                 frames[victim] = currentPage;
+                updatePresence(presenceMap, currentPage, 1);     // Adiciona nova página
             }
         }
 
@@ -80,7 +140,17 @@ int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPh
             displayFrameState("otimo", numPhysicalPages, frames, currentPage, victimPageId, slotIndex);
         }
 
-        free(victimPageId); // libera a memória da cópia se foi feita
+        free(victimPageId);
+    }
+    
+    // limpeza da tabela hash de presença
+    for(int i = 0; i < HASH_TABLE_SIZE; i++) {
+        PresenceNode* current = presenceMap[i];
+        while(current) {
+            PresenceNode* temp = current;
+            current = current->next;
+            free(temp);
+        }
     }
 
     free(frames);

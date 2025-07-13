@@ -7,7 +7,7 @@
 #include <ctype.h>
 #include <limits.h>
 
-#define MAX_PAGE_ID_LEN 10 
+#define MAX_PAGE_ID_LEN 10
 #define PAGE_SIZE_BYTES 4096 // tamanho da pag em bytes (4kb)
 #define LOG_INTERVAL 50000 // intervalo de logs
 #define DIDATIC_MODE_ACTIVATOR 32768 // limite de memoria p ativar o modo didatico
@@ -29,16 +29,30 @@ typedef struct HashNode {
     int fifoLoads;
     int optimalLoads;
     struct HashNode* next;
+    int* futureUses; //array dinamico q guardar os indices dos acessos futuros
+    int numFutureUses;  //qtde de acessos futuros registrados
+    int futureUsesCapacity; // capacidade atual do futureUses
+    int nextUsePointer; // ponteiro p o prox uso a ser considerado
 } HashNode;
+
+// hash de presença eh usado para verificar se uma pag ta presente na memoria
+typedef struct PresenceNode {
+    char page_id[MAX_PAGE_ID_LEN];
+    struct PresenceNode* next;
+} PresenceNode;
 
 extern HashNode* hashTable[HASH_TABLE_SIZE];
 
-unsigned int hashOptimize(const char* key); // hash para armazenar o id da pagina a um indice na tabela hash
+unsigned int hashOptimize(const char* key);
 void hashInit(); //inicializa a tabela hash
-void registerPage(const char* page_id); //registrar uma pagina na lista de pagins conhecidas (tabela hahs)
+void registerPage(const char* page_id); //registrar uma pagina na lista de paginas conhecidas (tabela hash)
+
+HashNode* findNode(const char* page_id);
+void preprocessOptimal(PageAccess* accessSequence, int numAccesses);
+
 void incrementLoadCount(const char* page_id, const char* algorithm); // conta quantas veze cada pagina foi carregada na memoria (compara o desempenho dos alga)
 void loadSummary(); //printa tabela de carregamento
-void cleanHashTable(); //libera a memoria da tabela hash (evida vazamentos de memória)
+void cleanHashTable(); //libera a memoria da tabela hash (evita vazamentos de memória)
 
 void displayFrameState(const char* algo, int num_pages, char** frames, const char* page_id, const char* pageToReplace, int slotIndex); //exibe o estado atual dos frames na memória
 long long parseMemorySize(const char * sizeStr); //funçao aux que converte a string de tamanho de mem para bytes

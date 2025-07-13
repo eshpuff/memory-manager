@@ -1,7 +1,15 @@
 #include "simulator.h"
 
+unsigned int presenceHash(const char* key) {
+    unsigned long hash = 5381;
+    int c;
+    while ((c = *key++))
+        hash = ((hash << 5) + hash) + c;
+    return hash % HASH_TABLE_SIZE;
+}
+
 int main(int argc, char *argv[]) {
-    // eespera os argumentos: ./programa <arquivo> <tamanho_memoria>
+    // eespera os argumentos: ./programa <arquivo> <tamanho memoria>
     if (argc < 3) {
         printf("Uso: %s <arquivo.txt> <memoria> [-v]\n", argv[0]);
         return 1;
@@ -10,11 +18,9 @@ int main(int argc, char *argv[]) {
     char* filename = argv[1];
     char* mem_size_str = argv[2];
 
-    if (argc > 3) {
-        if (strcmp(argv[3], "--verbose") == 0 || strcmp(argv[3], "-v") == 0) {
-            g_verbose = 1;
-            printf("logs em tempo real executando.\n");
-        }
+    if (argc > 3 && (strcmp(argv[3], "--verbose") == 0 || strcmp(argv[3], "-v") == 0)) {
+        g_verbose = 1;
+        printf("logs em tempo real executando.\n");
     }
 
     //parsea o tamanho da memória física
@@ -32,12 +38,7 @@ int main(int argc, char *argv[]) {
         printf("modo didático true para memória de %s.\n", mem_size_str);
     }
 
-    int numAccesses = 0;
-    int fifoFaults = 0;
-    int optimalFaults = 0;
-
-    printf("\nexecutando o fifo...\n");
-
+    //inicio da contagem de acessos e registro de pags
     FILE *file = fopen(filename, "r");
     if (!file) {
         perror("[ERRO] ao abrir o arquivo.");
@@ -46,139 +47,158 @@ int main(int argc, char *argv[]) {
 
     // inicia a tabela hash para contar páginas distintas
     hashInit();
+    PageAccess* tempAccessSequence = malloc(100000 * sizeof(PageAccess)); // Alocação inicial
+    int capacity = 100000;
+    int numAccesses = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), file)) {
+        char buffer[MAX_PAGE_ID_LEN];
+        if (sscanf(line, "%*d %s", buffer) == 1 || sscanf(line, "%s", buffer) == 1) {
+            if (strcmp(buffer, "...") == 0) continue;
+            
+            if (numAccesses >= capacity) {
+                capacity *= 2;
+                tempAccessSequence = realloc(tempAccessSequence, capacity * sizeof(PageAccess));
+            }
+            strcpy(tempAccessSequence[numAccesses].page_id, buffer);
+            registerPage(buffer);
+            numAccesses++;
+        }
+    }
+    fclose(file);
+    
+    PageAccess* accessSequence = realloc(tempAccessSequence, numAccesses * sizeof(PageAccess));
+    
+    // SIMULAÇÃO FIFO
+    printf("\nexecutando o fifo...\n");
+    int fifoFaults = 0;
     char **fifoFrames = (char**)malloc(numPages * sizeof(char*));
     for(int i = 0; i < numPages; i++) fifoFrames[i] = NULL;
     int fifoPointer = 0;
 
-    char line[256];
-    while (fgets(line, sizeof(line), file)) {
-        char buffer[MAX_PAGE_ID_LEN];
-        int lineNum;
+    // tbela hash para checagem rapida de presença
+    PresenceNode* fifoPresenceMap[HASH_TABLE_SIZE] = {NULL};
 
-        if (sscanf(line, "%d %s", &lineNum, buffer) == 2 || sscanf(line, "%s", buffer) == 1) {
-            if (strcmp(buffer, "...") == 0) continue;
+    for (int i = 0; i < numAccesses; i++) {
+        char* currentPageId = accessSequence[i].page_id;
 
-            numAccesses++;
+        if (i > 0 && i % LOG_INTERVAL == 0) {
+            printf("[FIFO] processando acesso %d...\n", i);
+        }
 
-            if (numAccesses > 0 && numAccesses % LOG_INTERVAL == 0) {
-                printf("[FIFO] processando acesso %d...\n", numAccesses);
+        //usa hash para verificar se a pag ta na mem
+        unsigned int hash_idx = presenceHash(currentPageId);
+        PresenceNode* p_node = fifoPresenceMap[hash_idx];
+        int pageFound = 0;
+        while(p_node) {
+            if(strcmp(p_node->page_id, currentPageId) == 0) {
+                pageFound = 1;
+                break;
+            }
+            p_node = p_node->next;
+        }
+
+        if (!pageFound) {
+            fifoFaults++;
+            incrementLoadCount(currentPageId, "fifo");
+
+            char* victimPageId = NULL;
+            if (fifoFrames[fifoPointer]) {
+                victimPageId = strdup(fifoFrames[fifoPointer]);
+                
+                // remove a vítima da tabela de presença
+                unsigned int old_hash_idx = presenceHash(victimPageId);
+                PresenceNode* curr = fifoPresenceMap[old_hash_idx];
+                PresenceNode* prev = NULL;
+                while(curr) {
+                    if(strcmp(curr->page_id, victimPageId) == 0) {
+                        if(prev) prev->next = curr->next;
+                        else fifoPresenceMap[old_hash_idx] = curr->next;
+                        free(curr);
+                        break;
+                    }
+                    prev = curr;
+                    curr = curr->next;
+                }
+            }
+            int slotIndex = fifoPointer;
+
+            if (g_verbose) {
+                char* old_page = victimPageId ? victimPageId : "empty";
+                printf("[FIFO] page fault #%d (acesso #%d): página '%s' não encontrada, substituindo '%s'.\n",
+                       fifoFaults, i + 1, currentPageId, old_page);
             }
 
-            // insere a página na tabela hash e conta as páginas distintas
-            registerPage(buffer);
+            free(fifoFrames[fifoPointer]);
+            fifoFrames[fifoPointer] = strdup(currentPageId);
 
-            // fifo em tempo real
-            int pageFound = 0;
-            for (int j = 0; j < numPages; j++) {
-                if (fifoFrames[j] && strcmp(fifoFrames[j], buffer) == 0) {
-                    pageFound = 1;
-                    break;
-                }
+            // adiciona a nova pag na tabela de presença
+            PresenceNode* new_p_node = malloc(sizeof(PresenceNode));
+            strcpy(new_p_node->page_id, currentPageId);
+            new_p_node->next = fifoPresenceMap[hash_idx];
+            fifoPresenceMap[hash_idx] = new_p_node;
+
+            if (g_didaticMode && g_verbose) {
+                displayFrameState("fifo", numPages, fifoFrames, currentPageId, victimPageId, slotIndex);
             }
 
-            if (!pageFound) {
-                fifoFaults++;
-                incrementLoadCount(buffer, "fifo");
-
-                // captura a vítima e slot  para o log didático do fifo
-                char* victimPageId = NULL;
-                if (fifoFrames[fifoPointer]) {
-                    victimPageId = strdup(fifoFrames[fifoPointer]); // copia o nome da vítima
-                }
-                int slotIndex = fifoPointer;
-
-                if (g_verbose) {
-                    char* old_page = fifoFrames[fifoPointer] ? fifoFrames[fifoPointer] : "empty";
-                    printf("[FIFO] page fault #%d (acesso #%d): página '%s' não encontrada, substituindo '%s'.\n",
-                           fifoFaults, numAccesses, buffer, old_page);
-                }
-
-                free(fifoFrames[fifoPointer]);
-                fifoFrames[fifoPointer] = strdup(buffer);
-                if(!fifoFrames[fifoPointer]){
-                    perror("[ERRO] falha ao alocar memória pro fifo");
-                    exit(1);
-                }
-
-                // chama a função didática com os argumentos corretos
-                if (g_didaticMode && g_verbose) {
-                    displayFrameState("fifo", numPages, fifoFrames, buffer, victimPageId, slotIndex);
-                }
-
-                free(victimPageId); //libera a cópia
-
-                fifoPointer = (fifoPointer + 1) % numPages;
-            }
+            free(victimPageId);
+            fifoPointer = (fifoPointer + 1) % numPages;
         }
     }
-    fclose(file);
+
+    // SIMULAÇÃO ÓTIMO
     printf("\nexecutando o ótimo...\n");
+    preprocessOptimal(accessSequence, numAccesses); // pre processamento
+    int optimalFaults = runOptimalSimulation(accessSequence, numAccesses, numPages);
 
-    //variaveis para armazenar os acessos
-    PageAccess * accessSequence = (PageAccess*)malloc(numAccesses * sizeof(PageAccess));
-    if (!accessSequence) {
-        perror("[ERRO] ao alocar memória pros acessos");
-        return 1;
-    }
 
-    file = fopen(filename, "r");
-    if (!file) {
-        perror("[ERRO] ao reabrir o arquivo de acessos");
-        free(accessSequence);
-        return 1;
-    }
-
-    int currentAccess = 0;
-    while (fgets(line, sizeof(line), file)) {
-        char buffer[MAX_PAGE_ID_LEN];
-        int lineNum;
-
-        if (sscanf(line, "%d %s", &lineNum, buffer) == 2 || sscanf(line, "%s", buffer) == 1) {
-            if (strcmp(buffer, "...") == 0) continue;
-            strcpy(accessSequence[currentAccess].page_id, buffer);
-            currentAccess++;
-        }
-    }
-    fclose(file);
-
-    // roda o algoritmo otimo
-    optimalFaults = runOptimalSimulation(accessSequence, numAccesses, numPages);
-
+    // RELATÓRIO FINAL
     printf("\nRELATÓRIO:\n");
+    double efficiency = (fifoFaults > 0) ? ((double)optimalFaults / fifoFaults) * 100.0 : 0.0;
+    if (fifoFaults > 0) {
+       efficiency = (1.0 - (double)(fifoFaults - optimalFaults) / fifoFaults) * 100.0;
+    } else {
+       efficiency = 100.0;
+    }
 
-    double efficiency = (optimalFaults > 0 && fifoFaults > 0) ? ((double)optimalFaults / fifoFaults) * 100.0 : 100.0;
-    if(fifoFaults == optimalFaults) efficiency = 100.0;
-    if(fifoFaults < optimalFaults) efficiency = 0.0;
 
-    // resultados
     printf("a memória física comporta %d páginas.\n", numPages);
     printf("há %d páginas distintas no arquivo.\n", g_pageCount);
-
-    //estimativa do tamanho da tabela de pag
-    long long tableSize = (long long)g_pageCount * 8;
+    
+    long long tableSize = (long long)g_pageCount * 8; // estimativa de 8 bytes por entrada
+    
     printf("estimativa do tamanho da tabela de páginas (1 nível): %lld bytes (%.2f KB).\n",
            tableSize, (double)tableSize / 1024.0);
 
     printf("com o algoritmo ÓTIMO ocorrem %d faltas de página.\n", optimalFaults);
     printf("com o algoritmo FIFO ocorrem %d faltas de página,\n", fifoFaults);
     printf("desempenho do FIFO em relação ao OTIMO: %.2f%%\n", efficiency);
-
+    
     printf("\ndeseja listar o número de carregamentos (s/n)? ");
-
     char choice;
     scanf(" %c", &choice);
-
+    
     if (choice == 's' || choice == 'S') {
         loadSummary();
     }
 
-    //libera memória
+    // libera memória
     free(accessSequence);
     cleanHashTable();
-    for (int i = 0; i < numPages; i++) {
-        free(fifoFrames[i]);
-    }
+    
+    for (int i = 0; i < numPages; i++) free(fifoFrames[i]);
     free(fifoFrames);
+    
+    // limpa a tabela de presença do fifo
+    for(int i=0; i<HASH_TABLE_SIZE; ++i) {
+        PresenceNode* curr = fifoPresenceMap[i];
+        while(curr) {
+            PresenceNode* temp = curr;
+            curr = curr->next;
+            free(temp);
+        }
+    }
 
     printf("\nterminou!\n");
     return 0;
