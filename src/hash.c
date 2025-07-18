@@ -85,7 +85,7 @@ void preprocessOptimal(PageAccess* accessSequence, int numAccesses) {
             node->futureUses[node->numFutureUses++] = i;
         }
     }
-     printf("[ORIMO] pre processamento concluido!\n");
+     printf("[OTIMO] pre processamento concluido!\n");
 }
 
 // contar quantas vezes cada página foi carregada na memória
