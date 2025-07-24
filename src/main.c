@@ -2,7 +2,7 @@
 
 #include "simulator.h"
 
-// distribui as pag na tabela hash
+// djb2 hash function
 unsigned int presenceHash(const char* key) {
     unsigned long hash = 5381;
     int c;
@@ -37,13 +37,12 @@ int main(int argc, char *argv[]) {
     // calcula quantas pag cabe na memoria fisica
     int numPages = memBytes / PAGE_SIZE_BYTES;
 
-    // modo didático se a memoria for menor que 32kb
     if (memBytes <= DIDATIC_MODE_ACTIVATOR) {
         g_didaticMode = 1;
         printf("modo didático true para memória de %s.\n", mem_size_str);
 
         // ativa verbose automaticamente para mem <= 32KB
-        if (!g_verbose) { // se não tiver ativado
+        if (!g_verbose) {
             g_verbose = 1;
             printf("verbose ativado automaticamente para memória pequena.\n");
         }
@@ -66,7 +65,7 @@ int main(int argc, char *argv[]) {
     int numAccesses = 0;
     char line[256];
 
-    // le o arq e pega o id das pag
+    // le o arq e extrai o id das pag
     while (fgets(line, sizeof(line), file)) {
         char buffer[MAX_PAGE_ID_LEN];
         if (sscanf(line, "%*d %s", buffer) == 1 || sscanf(line, "%s", buffer) == 1) {
@@ -77,7 +76,7 @@ int main(int argc, char *argv[]) {
                 capacity *= 2; // se precisar
                 tempAccessSequence = realloc(tempAccessSequence, capacity * sizeof(PageAccess));
             }
-            // salva o id da pag no array
+            // salva o id da pag no buffer 
             strcpy(tempAccessSequence[numAccesses].page_id, buffer);
             registerPage(buffer);
             numAccesses++;
@@ -85,19 +84,22 @@ int main(int argc, char *argv[]) {
     }
     fclose(file);
     
-    PageAccess* accessSequence = realloc(tempAccessSequence, numAccesses * sizeof(PageAccess)); // ajusta o tamanho do array
+     // ajusta o tam do array pra quantidade exata de acessos
+    PageAccess* accessSequence = realloc(tempAccessSequence, numAccesses * sizeof(PageAccess));
     
     // SIMULAÇÃO FIFO
     printf("\nexecutando o fifo...\n");
+
     int fifoFaults = 0;
+    
     char **fifoFrames = (char**)malloc(numPages * sizeof(char*));
     for(int i = 0; i < numPages; i++) fifoFrames[i] = NULL;
+
     int fifoPointer = 0; // aponta p qual quadro vai ser substituido quando tiver page fault
 
-    // tbela hash p ver se a pag carregou
-    PresenceNode* fifoPresenceMap[HASH_TABLE_SIZE] = {NULL};
+    PresenceNode* fifoPresenceMap[HASH_TABLE_SIZE] = {NULL}; // tabela hash q armazena as pag da mem fisica
 
-    // sequencia de acessos
+    // processa a sequencia de acessos 
     for (int i = 0; i < numAccesses; i++) {
         char* currentPageId = accessSequence[i].page_id;
 
@@ -105,10 +107,12 @@ int main(int argc, char *argv[]) {
             printf("[FIFO] processando acesso %d...\n", i);
         }
 
-        //usa hash para verificar se a pag ta na mem
+        //usa a posicao do hash para verificar se a pag ta na mem
         unsigned int hash_idx = presenceHash(currentPageId);
-        PresenceNode* p_node = fifoPresenceMap[hash_idx];
+        PresenceNode* p_node = fifoPresenceMap[hash_idx]; // verifica se a pag ta na memoria fisica
+
         int pageFound = 0;
+
         while(p_node) {
             if(strcmp(p_node->page_id, currentPageId) == 0) {
                 pageFound = 1;
@@ -117,22 +121,24 @@ int main(int argc, char *argv[]) {
             p_node = p_node->next;
         }
 
-        if (!pageFound) {
-            fifoFaults++; // falto pagina
+        if (!pageFound) { // page fault
+            fifoFaults++;
             incrementLoadCount(currentPageId, "fifo");
 
             char* victimPageId = NULL;
+
             if (fifoFrames[fifoPointer]) {
                 victimPageId = strdup(fifoFrames[fifoPointer]);
                 
-                // remove a vítima da tabela de presença se ja tiver 1 pagina no espaço
-                unsigned int old_hash_idx = presenceHash(victimPageId);
-                PresenceNode* curr = fifoPresenceMap[old_hash_idx];
+                unsigned int victimHashIndex = presenceHash(victimPageId);
+                PresenceNode* curr = fifoPresenceMap[victimHashIndex];
+
                 PresenceNode* prev = NULL;
+
                 while(curr) {
                     if(strcmp(curr->page_id, victimPageId) == 0) {
                         if(prev) prev->next = curr->next;
-                        else fifoPresenceMap[old_hash_idx] = curr->next;
+                        else fifoPresenceMap[victimHashIndex] = curr->next;
                         free(curr);
                         break;
                     }
@@ -179,6 +185,7 @@ int main(int argc, char *argv[]) {
 
     // comparacao dos algoritmos
     double efficiency = (fifoFaults > 0) ? ((double)optimalFaults / fifoFaults) * 100.0 : 0.0;
+
     if (fifoFaults > 0) {
        efficiency = (1.0 - (double)(fifoFaults - optimalFaults) / fifoFaults) * 100.0;
     } else {
@@ -206,7 +213,6 @@ int main(int argc, char *argv[]) {
         loadSummary();
     }
 
-    // libera memória
     free(accessSequence);
     cleanHashTable();
     
@@ -214,7 +220,7 @@ int main(int argc, char *argv[]) {
     free(fifoFrames);
     
     // limpa a tabela de presença do fifo
-    for(int i=0; i<HASH_TABLE_SIZE; ++i) {
+    for(int i = 0; i < HASH_TABLE_SIZE; ++i) {
         PresenceNode* curr = fifoPresenceMap[i];
         while(curr) {
             PresenceNode* temp = curr;

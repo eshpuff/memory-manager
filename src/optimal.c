@@ -8,14 +8,13 @@ static int isPageInFrames(PresenceNode* presenceMap[], const char* page_id) {
 
     // percorre a lista e procura a pagina 
     while(current) {
-        if(strcmp(current->page_id, page_id) == 0) return 1; // achou
+        if(strcmp(current->page_id, page_id) == 0) return 1;
         current = current->next;
     }
-    return 0; // n achou
+    return 0;
 }
 
-// função aux para adicionar ou remover da tabela de presença
-// manter controle de quantas pag tao nos quadros de pag 
+// controla quais pag tao na memoria fisica
 static void updatePresence(PresenceNode* presenceMap[], const char* page_id, int add) {
     unsigned int index = hashOptimize(page_id); 
 
@@ -27,7 +26,7 @@ static void updatePresence(PresenceNode* presenceMap[], const char* page_id, int
         }
 
         strcpy(newNode->page_id, page_id);
-        newNode->next = presenceMap[index]; // insere no inicio da lista
+        newNode->next = presenceMap[index]; // tabela hash q mapeia pagina presente 
         presenceMap[index] = newNode;
     } else { // remove a pag
         PresenceNode* current = presenceMap[index];
@@ -48,29 +47,27 @@ static void updatePresence(PresenceNode* presenceMap[], const char* page_id, int
     }
 }
 
-// função auxiliar do otimo para encontrar o prox uso de uma pag
-// serve pro otimo encontrar a pag que vai ser usada mais tarde
+// otimo encontra a pag que vai ser usada mais tarde
 static int getNextUse(HashNode* node, int currentIndex) {
-    // avança o cursor ate encontrar um uso futuro que seja depois do indice atual
-    while (node->nextUsePointer < node->numFutureUses &&
-           node->futureUses[node->nextUsePointer] <= currentIndex) {
+    // avança o pointer ate encontrar um uso futuro que seja depois do indice atual
+    while (node -> nextUsePointer < node -> numFutureUses &&
+           node -> futureUses[node -> nextUsePointer] <= currentIndex) {
         node->nextUsePointer++;
     }
 
     // se ainda tiver usos futuros retorna o proximo
-    if (node->nextUsePointer < node->numFutureUses) {
+    if (node -> nextUsePointer < node -> numFutureUses) {
         return node->futureUses[node->nextUsePointer];
     }
 
-    return INT_MAX; // infinito
+    return INT_MAX;
 }
 
-// simulacao main
 // retorna a quantidade de faltas de pag q ocorreram
 int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPhysicalPages) {
 
-    //aloca pros quadros da mem fisica
-    char **frames = malloc(numPhysicalPages * sizeof(char *));
+    //aloca os frames da mem fisica
+    char **frames = malloc(numPhysicalPages * sizeof(char *)); 
     for (int i = 0; i < numPhysicalPages; i++) frames[i] = NULL;
 
     int pageFaults = 0;
@@ -85,6 +82,7 @@ int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPh
         }
 
         char *currentPage = accessSequence[i].page_id;
+
         int pageFound = isPageInFrames(presenceMap, currentPage);
 
         char* victimPageId = NULL; // armazena pag que vai ser removida no futuro
@@ -119,16 +117,17 @@ int runOptimalSimulation(PageAccess * accessSequence, int numAccesses, int numPh
                 int victim = -1;
                 int farthest = -1; // mais longe de ser usado dnv
 
-                for (int j = 0; j < numPhysicalPages; j++) {
-                    HashNode* frameNode = findNode(frames[j]);
-                    int nextUse = getNextUse(frameNode, i);
+                for (int j = 0; j < numPhysicalPages; j++) { 
+                    HashNode* frameNode = findNode(frames[j]); // da as infos de processamento da pag e seu usos futuros
 
-                    if (nextUse == INT_MAX) {
+                    int nextUse = getNextUse(frameNode, i); 
+
+                    if (nextUse == INT_MAX) { // nunca mais usada
                         victim = j;
                         break;
                     }
 
-                    if (nextUse > farthest) { 
+                    if (nextUse > farthest) { // acha a pag que vai ser usada mais tarde
                         farthest = nextUse;
                         victim = j;
                     }
